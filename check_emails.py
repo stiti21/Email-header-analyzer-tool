@@ -11,6 +11,10 @@ with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     writer.writeheader()
 
+    
+    match_count = 0
+    differ_count = 0
+
     for root, dirs, files in os.walk(folder):
         for file in files:
             if file.startswith("."):
@@ -27,6 +31,12 @@ with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
 
                 status = "MATCH" if from_addr == return_addr else "DIFFER"
 
+                
+                if status == "MATCH":
+                    match_count += 1
+                else:
+                    differ_count += 1
+
                 writer.writerow({
                     "Filename": file,
                     "From": from_addr,
@@ -38,5 +48,6 @@ with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
                 })
 
 print("Results saved to:", output_csv)
-
-
+print(f"MATCH emails: {match_count}")
+print(f"DIFFER emails: {differ_count}")
+print(f"Total emails analyzed: {match_count + differ_count}")
