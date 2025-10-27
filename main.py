@@ -7,7 +7,7 @@ directory_path = "/home/stiti/tool/dataset/emails"  # <-- Change if needed
 
 headers_to_extract = ["From", "To", "Cc", "Date", "Message-ID", "Return-Path"]
 
-csv_file_path = "/home/stiti/tool/dataset/emails/csv/email_headers.csv"  # Output CSV location
+csv_file_path = "/home/stiti/tool/csv/email_headers.csv"  # Output CSV location
 
 with open(csv_file_path, mode="w", newline="", encoding="utf-8") as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=["Filename"] + headers_to_extract)
