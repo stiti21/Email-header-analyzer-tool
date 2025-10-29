@@ -5,7 +5,7 @@ import csv
 
 directory_path = "/home/stiti/tool/dataset/emails"  # <-- Change if needed
 
-headers_to_extract = ["From", "To", "Cc", "Date", "Message-ID", "Return-Path"]
+headers_to_extract = ["From", "To", "Cc", "Date", "Message-ID", "Return-Path" ,"Authentication-Results"]
 
 csv_file_path = "/home/stiti/tool/csv/email_headers.csv"  # Output CSV location
 
