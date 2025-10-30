@@ -11,7 +11,7 @@ with open(input_csv, "r", encoding="utf-8") as infile, \
     writer.writerow(["File", "SPF", "DKIM","Status"])
 
     for row in reader:
-        file_name = row.get("File", "Unknown").strip()
+        file_name = row.get("From", "Unknown").strip()
         auth = row.get("Authentication-Results", "").lower()
 
         spf = "FAIL" if "spf=fail" in auth else "PASS"  # SPF check
