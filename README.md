@@ -4,6 +4,8 @@ The Email Header Analyzer Tool is a command-line forensic tool built using Pytho
 Optional: To enable VirusTotal checks set your API key:
 Linux/macOS:
   export VT_API_KEY="your_real_vt_api_key"
+  
 Windows (PowerShell):
   setx VT_API_KEY "your_real_vt_api_key"
+  
 Or create a .env file and use python-dotenv.
