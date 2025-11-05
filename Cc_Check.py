@@ -5,7 +5,7 @@ output_file = '/home/kali/tool/cc_check_results.csv'
 
 output_data = [['Filename', 'Cc', 'Cc_Status', 'Final_Status', 'Error']]
 
-with open(inputimport_file, 'r', encoding='utf-8', errors='replace') as infile:
+with open(input_file, 'r', encoding='utf-8', errors='replace') as infile:
     reader = csv.DictReader(infile)
     for row in reader:
         try:
@@ -28,3 +28,4 @@ with open(output_file, 'w', newline='', encoding='utf-8') as outfile:
     writer.writerows(output_data)
 
 print("Done! Results saved to:", output_file)
+
