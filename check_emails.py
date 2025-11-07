@@ -1,51 +1,43 @@
-import os
-import email
-from email import policy
+
 import csv
 
-folder = "/home/stiti/tool/dataset/emails"
-output_csv = "/home/stiti/tool/csv/from_return_check.csv"
+input_csv = "/home/kali/tool/email_headers.csv"
+output_csv = "/home/kali/tool/csv/from_return_check.csv"
 
-with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
-    fieldnames = ["Filename", "From", "To", "CC", "Return-Path", "Message-ID", "Status"]
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+match_count = 0
+differ_count = 0
+
+with open(input_csv, "r", encoding="utf-8") as infile, \
+     open(output_csv, "w", newline="", encoding="utf-8") as outfile:
+
+    reader = csv.DictReader(infile)
+    writer = csv.DictWriter(outfile, fieldnames=["Filename", "From", "To", "CC", "Return-Path", "Message-ID", "Status"])
     writer.writeheader()
 
-    
-    match_count = 0
-    differ_count = 0
+    for row in reader:
+        filename = row.get("Filename", "")
+        from_addr = row.get("From", "")
+        to_addr = row.get("To", "")
+        cc_addr = row.get("Cc", "")
+        return_addr = row.get("Return-Path", "")
+        msg_id = row.get("Message-ID", "")
 
-    for root, dirs, files in os.walk(folder):
-        for file in files:
-            if file.startswith("."):
-                continue
-            path = os.path.join(root, file)
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                msg = email.message_from_file(f, policy=policy.default)
-                
-                from_addr = msg.get("From", "")
-                to_addr = msg.get("To", "")
-                cc_addr = msg.get("Cc", "")
-                return_addr = msg.get("Return-Path", "")
-                msg_id = msg.get("Message-ID", "")
+        status = "MATCH" if from_addr == return_addr else "DIFFER"
 
-                status = "MATCH" if from_addr == return_addr else "DIFFER"
+        if status == "MATCH":
+            match_count += 1
+        else:
+            differ_count += 1
 
-                
-                if status == "MATCH":
-                    match_count += 1
-                else:
-                    differ_count += 1
-
-                writer.writerow({
-                    "Filename": file,
-                    "From": from_addr,
-                    "To": to_addr,
-                    "CC": cc_addr,
-                    "Return-Path": return_addr,
-                    "Message-ID": msg_id,
-                    "Status": status
-                })
+        writer.writerow({
+            "Filename": filename,
+            "From": from_addr,
+            "To": to_addr,
+            "CC": cc_addr,
+            "Return-Path": return_addr,
+            "Message-ID": msg_id,
+            "Status": status
+        })
 
 print("Results saved to:", output_csv)
 print(f"MATCH emails: {match_count}")
