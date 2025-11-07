@@ -52,7 +52,6 @@ for i, msg in enumerate(mbox, start=1):
     for link in links:
         result = local_check(link)
         results.append([f"msg_{i}", link, "Local Check", result])
-
 with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow(["Message", "URL", "Mode Used", "Result"])
