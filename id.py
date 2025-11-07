@@ -1,76 +1,52 @@
-import os
 import csv
 
-directory_path = "/home/stiti/tool/csv/email_headers.csv"
-output_file = '/home/stiti/tool/csv/phishing_check_results.csv'
+input_file = "/home/kali/tool/email_headers.csv"
+output_file = "/home/kali/tool/csv/phishing_check_results.csv"
 
-output_data = [['Filename', 'Message-ID', 'Return-Path', 'From', 'To', 'Phishing', 'Error']]
+output_data = [["Filename", "From", "Return-Path", "Message-ID", "Phishing", "Reason"]]
 
-def check_phishing(msg_id, return_path, from_header):
-    try:
-        if not msg_id or not return_path or not from_header:
-            return 'Unknown', 'Missing required headers'
+total = 0
+phishing_count = 0
+safe_count = 0
 
-        msg_id_domain = msg_id.split('@')[-1].strip('>')
-        return_path_domain = return_path.split('@')[-1].strip('>')
+def simple_check(from_header, return_path, msg_id):
+    if not from_header or not return_path or not msg_id:
+        return "Unknown", "Missing required headers"
+    
+    from_domain = from_header.split("@")[-1].replace(">", "").replace("<", "") if "@" in from_header else ""
+    return_domain = return_path.split("@")[-1].replace(">", "").replace("<", "") if "@" in return_path else ""
+    msg_domain = msg_id.split("@")[-1].replace(">", "").replace("<", "") if "@" in msg_id else ""
+
+    if from_domain != return_domain:
+        return "Phishing", "From and Return-Path domains differ"
+    elif msg_domain != from_domain:
+        return "Phishing", "Message-ID domain differs from sender"
+    else:
+        return "Safe", "Domains match"
+
+with open(input_file, "r", encoding="utf-8", errors="ignore") as infile:
+    reader = csv.DictReader(infile)
+    for row in reader:
+        total += 1
+        filename = row.get("Filename", "")
+        from_header = row.get("From", "")
+        return_path = row.get("Return-Path", "")
+        msg_id = row.get("Message-ID", "")
         
-        from_email = from_header
-        if '<' in from_header and '>' in from_header:
-            from_email = from_header.split('<')[-1].split('>')[0]
-        from_domain = from_email.split('@')[-1] if '@' in from_email else ''
+        result, reason = simple_check(from_header, return_path, msg_id)
 
-        return_path_matches_from = return_path_domain == from_domain
-        
-        msg_id_suspicious = msg_id_domain != from_domain
-        
-        common_legitimate_domains = ['hotmail.com', 'gmail.com', 'yahoo.com', 'university.edu', 
-                                   'services.org', 'acme-corp.com', 'banking.com']
-        
-        return_path_suspicious = (return_path_domain != from_domain and 
-                                from_domain in common_legitimate_domains and
-                                return_path_domain not in common_legitimate_domains)
+        if "Phishing" in result:
+            phishing_count += 1
+        elif "Safe" in result:
+            safe_count += 1
 
-        is_phishing = (not return_path_matches_from) and (msg_id_suspicious or return_path_suspicious)
-        
-        return is_phishing, ''
+        output_data.append([filename, from_header, return_path, msg_id, result, reason])
 
-    except Exception as e:
-        return 'Unknown', f'Error: {str(e)}'
-
-try:
-    with open(directory_path, 'r', encoding='utf-8', errors='ignore') as csvfile:
-        reader = csv.reader(csvfile)
-        
-        for row in reader:
-            if len(row) < 6:  
-                continue
-                
-            filename = row[0].strip()
-            from_header = row[1].strip()
-            to_header = row[2].strip()
-            msg_id = row[4].strip() if len(row) > 4 else ''
-            return_path = row[5].strip() if len(row) > 5 else ''
-            
-            if not filename or filename == 'Filename':
-                continue
-            
-            is_phishing, error = check_phishing(msg_id, return_path, from_header)
-            
-            output_data.append([
-                filename, 
-                msg_id, 
-                return_path, 
-                from_header, 
-                to_header, 
-                is_phishing, 
-                error
-            ])
-
-except Exception as e:
-    output_data.append(['', '', '', '', '', 'Unknown', f'CSV Processing Error: {str(e)}'])
-
-with open(output_file, 'w', newline='', encoding='utf-8') as outfile:
+with open(output_file, "w", newline="", encoding="utf-8") as outfile:
     writer = csv.writer(outfile)
     writer.writerows(output_data)
 
-print("Done! Check phishing_check_results.csv")
+print("Done! Results saved to phishing_check_results.csv")
+print(f"Total emails: {total}")
+print(f"Phishing detected: {phishing_count}")
+print(f"Safe emails: {safe_count}")
