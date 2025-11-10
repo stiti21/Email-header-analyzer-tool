@@ -1,24 +1,28 @@
 import csv
 
-input_csv = "/home/kali/tool/email_headers.csv"
-output_csv = "/home/kali/tool/csv/auth_results.csv"
+input_csv = "/home/stiti/test/csv/email_headers.csv"
+output_csv = "/home/stiti/test/csv/auth_results.csv"
 
-phishing_count = 0
+total_emails = 0
 safe_count = 0
+phishing_count = 0
 
 with open(input_csv, "r", encoding="utf-8") as infile, \
      open(output_csv, "w", newline="", encoding="utf-8") as outfile:
 
     reader = csv.DictReader(infile)
     writer = csv.writer(outfile)
-    writer.writerow(["From", "SPF", "DKIM", "Status", "Auth_Header"])
+    writer.writerow(["Filename", "From", "SPF_Status", "DKIM_Status", "Result"])
 
     for row in reader:
+        total_emails += 1
+        filename = row.get("Filename", "")
         from_header = row.get("From", "Unknown").strip()
         auth = row.get("Authentication-Results", "").lower()
 
         if not auth:
-            spf = dkim = "MISSING"
+            spf = "MISSING"
+            dkim = "MISSING"
         else:
             if any(x in auth for x in ["spf=fail", "spf=hardfail"]):
                 spf = "FAIL"
@@ -34,17 +38,16 @@ with open(input_csv, "r", encoding="utf-8") as infile, \
             else:
                 dkim = "NONE"
 
-        # Determine email status: any non-PASS is PHISHING
         if spf == "PASS" and dkim == "PASS":
-            status = "SAFE"
+            result = "NORMAL"
             safe_count += 1
         else:
-            status = "PHISHING"
+            result = "PHISHING"
             phishing_count += 1
 
-        writer.writerow([from_header, spf, dkim, status, auth])
+        writer.writerow([filename, from_header, spf, dkim, result])
 
 print("Done! Results saved to:", output_csv)
+print(f"Total emails processed: {total_emails}")
+print(f"Normal emails: {safe_count}")
 print(f"Phishing emails: {phishing_count}")
-print(f"Safe emails: {safe_count}")
-
