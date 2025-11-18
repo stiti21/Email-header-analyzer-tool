@@ -9,7 +9,8 @@ directory_path = "/home/kali/tool/email/phishing_pot"
 MBOX_PATH = "/home/kali/tool/email/phishing3.mbox"
 csv_file_path = "/home/kali/tool/csv/email_headers.csv"
 
-headers_to_extract = ["From", "To", "Cc", "Date", "Message-ID", "Return-Path", "Authentication-Results"]
+headers_to_extract = ["From", "To", "Message-ID", "Return-Path", "Authentication-Results"]
+
 limit = 4000
 count = 0
 
