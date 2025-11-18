@@ -1,0 +1,48 @@
+import os
+import email
+from email import policy
+import csv
+import re
+from spellchecker import SpellChecker
+
+EMAIL_FOLDER = "/home/stiti/tool/dataset/emails"
+OUTPUT_FILE = "/home/stiti/tool/csv/spell_check_results.csv"
+
+spell = SpellChecker()
+def extract_body(msg):
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() in ["text/plain", "text/html"]:
+                try:
+                    text = part.get_payload(decode=True).decode(errors="ignore")
+                    body += text
+                except:
+                    continue
+    else:
+        try:
+            body = msg.get_payload(decode=True).decode(errors="ignore")
+        except:
+            body = ""
+    return body
+
+def spelling_rule(text):
+
+    clean_text = re.sub(r'[^a-zA-Z\s]', ' ', text)
+
+    words = [w.lower() for w in clean_text.split() if len(w) > 3]
+    misspelled = spell.unknown(words)
+
+    if misspelled:
+        short_list = list(misspelled)[:10]
+        return "Suspicious", f"Spelling mistakes: {', '.join(short_list)}"
+    else:
+        return "Safe", "No spelling mistakes"
+
+  with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Filename", "Body_Preview", "Status", "Details"])
+        writer.writerows(results)
+
+    print("Spell check completed.")
+    print(" Results saved to:", OUTPUT_FILE)
