@@ -1,0 +1,379 @@
+import csv
+import re
+import datetime
+import dns.resolver
+import tldextract
+import whois
+import time
+import random
+from bs4 import BeautifulSoup
+
+csv.field_size_limit(10000000)  
+
+class PhishingDetector:
+    def __init__(self):
+        self.input_csv = "/home/stiti/abood/csv/email.csv"
+        self.output_csv = "/home/stiti/abood/csv/detection_results.csv"
+        
+        # Configuration
+        self.SUSPICIOUS_TLDS = {".top", ".xyz", ".zip", ".click", ".quest", ".shop", ".online", ".ink", ".center", ".group", ".io", ".club", ".site"}
+        self.BRANDS = {
+            "paypal": ["paypal.com", "paypal-secure.com", "paypal-verify.com"],
+            "microsoft": ["microsoft.com", "outlook.com", "office.com", "live.com"],
+            "google": ["google.com", "gmail.com", "google-drive.com", "google-security.com"],
+            "amazon": ["amazon.com", "amazon-security.com", "amazon-payments.com"],
+            "facebook": ["facebook.com", "fb.com", "facebook-security.com"],
+            "apple": ["apple.com", "icloud.com", "apple-id.com"],
+            "netflix": ["netflix.com", "netflix-billing.com"],
+            "bank": ["chase.com", "wellsfargo.com", "bankofamerica.com", "citibank.com"],
+            "twitter": ["twitter.com", "x.com"],
+            "instagram": ["instagram.com"],
+            "whatsapp": ["whatsapp.com"],
+            "linkedin": ["linkedin.com"],
+            "ebay": ["ebay.com"],
+            "bradesco": ["bradesco.com.br"],
+            "tesla": ["tesla.com"],
+            "starbucks": ["starbucks.com"],
+            "walmart": ["walmart.com"],
+            "dropbox": ["dropbox.com"]
+        }
+        self.KNOWN_SAFE_DOMAINS = {
+            'gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'google.com',
+            'microsoft.com', 'apple.com', 'icloud.com', 'live.com', 'aol.com'
+        }
+        self.SUSPICIOUS_WORDS = [
+            "login", "log in", "password", "pass", "verify", "verification",
+            "reset", "update", "urgent", "bank", "account", "security",
+            "confirm", "click", "unlock", "suspend", "locked", "immediately",
+            "action required", "suspended", "compromised", "billing", "invoice"
+        ]
+
+    # ========== RULE 1: From vs Return-Path Check ==========
+    def rule1_from_return_check(self, from_header, return_path):
+        """Rule 1: Check if From and Return-Path emails match"""
+        def get_email(text):
+            # Handle very large fields
+            text_sample = str(text)[:10000]  # Only check first 10K characters
+            email_match = re.findall(r'[\w\.-]+@[\w\.-]+', text_sample)
+            return email_match[0].lower() if email_match else ""
+
+        from_email = get_email(from_header)
+        return_email = get_email(return_path)
+        
+        status = "MATCH" if from_email == return_email else "DIFFER"
+        return {
+            "Rule1_Status": status,
+            "Rule1_From_Email": from_email,
+            "Rule1_Return_Email": return_email
+        }
+
+    # ========== RULE 2: Authentication Results Check ==========
+    def rule2_auth_check(self, auth_header):
+        """Rule 2: Check SPF and DKIM authentication"""
+        # Limit auth header size
+        auth = str(auth_header)[:50000].lower()  # Only check first 50K chars
+        
+        if not auth:
+            spf = "MISSING"
+            dkim = "MISSING"
+        else:
+            if any(x in auth for x in ["spf=fail", "spf=hardfail"]):
+                spf = "FAIL"
+            elif "spf=pass" in auth:
+                spf = "PASS"
+            else:
+                spf = "NONE"
+                
+            if "dkim=fail" in auth:
+                dkim = "FAIL"
+            elif "dkim=pass" in auth:
+                dkim = "PASS"
+            else:
+                dkim = "NONE"
+
+        result = "NORMAL" if spf == "PASS" and dkim == "PASS" else "PHISHING"
+        
+        return {
+            "Rule2_SPF": spf,
+            "Rule2_DKIM": dkim,
+            "Rule2_Result": result
+        }
+
+    # ========== RULE 3: Domain Analysis ==========
+    def rule3_domain_analysis(self, from_header):
+        """Rule 3: Analyze domain reputation - IMPROVED BRAND IMPERSONATION"""
+        def get_domain_from_email(email):
+            try:
+                email_sample = str(email)[:1000]  # Limit email size
+                if "@" not in email_sample:
+                    return None
+                return email_sample.split("@")[-1].strip().lower()
+            except:
+                return None
+
+        def has_mx_records(domain):
+            try:
+                answers = dns.resolver.resolve(domain, 'MX')
+                return len(answers) > 0
+            except:
+                return False
+
+        def is_suspicious_tld(domain):
+            try:
+                tld = "." + domain.split(".")[-1]
+                return tld in self.SUSPICIOUS_TLDS
+            except:
+                return False
+
+        def detect_brand_impersonation(sender_domain):
+            """IMPROVED: Better brand impersonation detection"""
+            if not sender_domain:
+                return None
+            
+            clean_domain = sender_domain.replace('www.', '')
+            
+            try:
+                domain_parts = clean_domain.split('.')
+                if len(domain_parts) >= 2:
+                    domain_name = domain_parts[0]  # Main part before TLD
+                    
+                    for brand, official_domains in self.BRANDS.items():
+                        if brand in domain_name.lower():
+                            is_official = False
+                            for official_domain in official_domains:
+                                if clean_domain == official_domain or clean_domain.endswith('.' + official_domain):
+                                    is_official = True
+                                    break
+                            
+                            if not is_official:
+                                return brand
+                
+                brand_typos = {
+                    "paypal": ["paypa1", "paypai", "paypai", "paypaI"],
+                    "microsoft": ["micros0ft", "rnicrosoft", "microsoftt"],
+                    "google": ["g00gle", "googIe", "googie"],
+                    "amazon": ["amaz0n", "amaz0n", "arnazon"]
+                }
+                
+                for brand, typos in brand_typos.items():
+                    for typo in typos:
+                        if typo in clean_domain:
+                            return f"fake_{brand}"
+                
+                return None
+            except:
+                return None
+
+        def extract_email_from_sender_field(sender_field):
+            try:
+                sender_sample = str(sender_field)[:1000]  # Limit size
+                if "<" in sender_sample and ">" in sender_sample:
+                    start = sender_sample.find("<") + 1
+                    end = sender_sample.find(">")
+                    email_part = sender_sample[start:end]
+                    if "@" in email_part:
+                        for part in email_part.split():
+                            if "@" in part:
+                                return part.strip()
+                elif "@" in sender_sample:
+                    for part in sender_sample.split():
+                        if "@" in part:
+                            return part.strip()
+                return sender_sample.strip()
+            except:
+                return sender_field.strip()
+
+        email_addr = extract_email_from_sender_field(from_header)
+        domain = get_domain_from_email(email_addr)
+        
+        if not domain:
+            return {
+                "Rule3_Risk_Score": 60,
+                "Rule3_Risk_Level": "High",
+                "Rule3_Domain": "",
+                "Rule3_Brand_Impersonation": None
+            }
+
+        score = 0
+        brand = detect_brand_impersonation(domain)
+        if brand:
+            score += 50  
+
+        if is_suspicious_tld(domain):
+            score += 25  
+
+        if not has_mx_records(domain):
+            score += 25
+
+
+        risk_level = "High" if score >= 60 else "Medium" if score >= 30 else "Low"
+        
+        return {
+            "Rule3_Risk_Score": score,
+            "Rule3_Risk_Level": risk_level,
+            "Rule3_Domain": domain,
+            "Rule3_Brand_Impersonation": brand
+        }
+
+    # ========== RULE 4: Missing Message-ID Check ==========
+    def rule4_missing_message_ids(self, message_id):
+        """Rule 4: Check for missing Message-IDs"""
+        msg_id = str(message_id)[:1000].strip() if message_id else ""
+        is_missing = not msg_id
+        
+        return {
+            "Rule4_Message_ID": msg_id[:100],  
+            "Rule4_Missing": is_missing
+        }
+
+    # ========== RULE 5: Content Analysis ==========
+    def rule5_content_analysis(self, body_text, body_html):
+        """Rule 5: Analyze email content for phishing indicators"""
+        def contains_suspicious_words(text):
+            text_l = str(text)[:10000].lower()  
+            for word in self.SUSPICIOUS_WORDS:
+                if word in text_l:
+                    return True
+            return False
+
+        def extract_links_from_html(html):
+            try:
+                # Limit HTML processing to avoid memory issues
+                html_sample = html[:50000]  
+                soup = BeautifulSoup(html_sample, "html.parser")
+                links = []
+                for a in soup.find_all("a", href=True):
+                    visible = a.get_text(strip=True)
+                    actual = a["href"]
+                    links.append((visible, actual))
+                return links[:10] 
+            except:
+                return []
+
+        def check_if_phishing(visible, actual):
+            visible = str(visible)[:200]  
+            actual = str(actual)[:200]   
+            if visible.strip().lower() != actual.strip().lower() and visible != "[IMAGE]":
+                return True
+            return False
+
+        full_text = f"{body_text} {body_html}"[:10000]  # Limit to 10K chars
+        
+        suspicious_words_found = contains_suspicious_words(full_text)
+        link_mismatch_found = False
+        
+        links = extract_links_from_html(body_html)
+        for visible, actual in links:
+            if check_if_phishing(visible, actual):
+                link_mismatch_found = True
+                break
+
+        is_phishing = suspicious_words_found or link_mismatch_found
+        
+        reasons = []
+        if suspicious_words_found:
+            reasons.append("suspicious_words")
+        if link_mismatch_found:
+            reasons.append("link_mismatch")
+            
+        return {
+            "Rule5_Phishing": is_phishing,
+            "Rule5_Reasons": " | ".join(reasons) if reasons else "clean",
+            "Rule5_Suspicious_Words": suspicious_words_found,
+            "Rule5_Link_Mismatch": link_mismatch_found
+        }
+
+    def run_detection(self):
+        """Run all 5 rules on the email data"""
+        print("🚀 Starting Phishing Detection with All 5 Rules")
+        print("="*60)
+        
+        try:
+            with open(self.input_csv, 'r', encoding='utf-8') as infile, \
+                 open(self.output_csv, 'w', newline='', encoding='utf-8') as outfile:
+                
+                reader = csv.DictReader(infile)
+                
+                output_fields = ['Filename']
+                essential_headers = ['From', 'Return-Path', 'Authentication-Results', 'Message-ID', 'Date']
+                output_fields.extend(essential_headers)
+                
+                rule_fields = [
+                    'Rule1_Status', 'Rule1_From_Email', 'Rule1_Return_Email',
+                    'Rule2_SPF', 'Rule2_DKIM', 'Rule2_Result',
+                    'Rule3_Risk_Score', 'Rule3_Risk_Level', 'Rule3_Domain', 'Rule3_Brand_Impersonation',
+                    'Rule4_Message_ID', 'Rule4_Missing',
+                    'Rule5_Phishing', 'Rule5_Reasons', 'Rule5_Suspicious_Words', 'Rule5_Link_Mismatch'
+                ]
+                output_fields.extend(rule_fields)
+                
+                writer = csv.DictWriter(outfile, fieldnames=output_fields)
+                writer.writeheader()
+                
+                total_emails = 0
+                processed_count = 0
+                print("Processing emails...")
+                
+                for row in reader:
+                    total_emails += 1
+                    filename = row.get('Filename', '')
+                    
+                    if total_emails % 10 == 0:
+                        print(f"  Processed {total_emails} emails...")
+                    
+                    try:
+                        rule1_result = self.rule1_from_return_check(
+                            row.get('From', ''), 
+                            row.get('Return-Path', '')
+                        )
+                        
+                        rule2_result = self.rule2_auth_check(
+                            row.get('Authentication-Results', '')
+                        )
+                        
+                        rule3_result = self.rule3_domain_analysis(
+                            row.get('From', '')
+                        )
+                        
+                        rule4_result = self.rule4_missing_message_ids(
+                            row.get('Message-ID', '')
+                        )
+                        
+                        rule5_result = self.rule5_content_analysis(
+                            row.get('Body_Text', ''),
+                            row.get('Body_HTML', '')
+                        )
+                        
+                        combined_row = {
+                            'Filename': filename,
+                            'From': str(row.get('From', ''))[:500],
+                            'Return-Path': str(row.get('Return-Path', ''))[:500],
+                            'Authentication-Results': str(row.get('Authentication-Results', ''))[:1000],
+                            'Message-ID': str(row.get('Message-ID', ''))[:200],
+                            'Date': str(row.get('Date', ''))[:100]  # ADDED DATE
+                        }
+                        combined_row.update(rule1_result)
+                        combined_row.update(rule2_result)
+                        combined_row.update(rule3_result)
+                        combined_row.update(rule4_result)
+                        combined_row.update(rule5_result)
+                        
+                        writer.writerow(combined_row)
+                        processed_count += 1
+                    
+                    except Exception as e:
+                        print(f"  ⚠️  Skipped {filename}: {str(e)}")
+                        continue
+                
+                print(f"✅ All 5 rules completed! {processed_count}/{total_emails} emails successfully processed")
+                print(f"📊 Results saved to: {self.output_csv}")
+                
+        except Exception as e:
+            print(f"❌ Error during detection: {str(e)}")
+
+def main():
+    detector = PhishingDetector()
+    detector.run_detection()
+
+if __name__ == "__main__":
+    main()
