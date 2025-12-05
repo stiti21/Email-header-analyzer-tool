@@ -5,8 +5,8 @@ import csv
 import re
 from spellchecker import SpellChecker
 
-EMAIL_FOLDER = "/home/stiti/tool/dataset/emails"
-OUTPUT_FILE = "/home/stiti/tool/csv/spell_check_results.csv"
+EMAIL_FOLDER = "/home/batool/MyProject/email.csv"
+OUTPUT_FILE = "/home/batool/MyProject/spell.csv"
 
 spell = SpellChecker()
 
