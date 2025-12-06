@@ -16,13 +16,11 @@ from bs4 import BeautifulSoup
 INPUT_CSV = "/home/kali/tool/csv/email.csv"
 OUTPUT_CSV = "/home/kali/tool/csv/detection_results.csv"
 
-# increase field size for large CSV cells
 csv.field_size_limit(10000000)
 
 
 class PhishingDetector:
     def __init__(self):
-        # Suspicious TLDs (no leading dot)
         self.SUSPICIOUS_TLDS = {
             "top", "xyz", "zip", "click", "quest", "shop", "online",
             "ink", "center", "group", "io", "club", "site"
@@ -34,19 +32,17 @@ class PhishingDetector:
             "confirm", "click", "unlock", "suspend", "locked",
             "immediately", "action required", "suspended", "billing", "invoice"
         ]
-        # compile patterns with word boundaries
+
         self.SUSPICIOUS_PATTERNS = [
             re.compile(r"\b" + re.escape(w) + r"\b", re.IGNORECASE)
             for w in suspicious_words
         ]
 
-        # DNS resolver
         self.resolver = dns.resolver.Resolver()
         self.resolver.lifetime = 5.0
         self.resolver.timeout = 3.0
         self.mx_cache = {}
 
-    # Rule 1: From vs Return-Path
     def rule1_from_return(self, from_h, return_h):
         def get_email(v):
             try:
@@ -64,7 +60,6 @@ class PhishingDetector:
             "Rule1_Return_Email": r
         }
 
-    # Rule 2: SPF & DKIM check (from Authentication-Results string)
     def rule2_auth(self, auth):
         a = str(auth or "").lower()
         spf = "NONE"
@@ -80,7 +75,6 @@ class PhishingDetector:
         result = "NORMAL" if (spf == "PASS" and dkim == "PASS") else "PHISHING"
         return {"Rule2_SPF": spf, "Rule2_DKIM": dkim, "Rule2_Result": result}
 
-    # Rule 3: Domain analysis (TLD, MX, brand placeholder)
     def rule3_domain(self, from_h):
         def extract_email(v):
             try:
@@ -101,7 +95,6 @@ class PhishingDetector:
         domain = email_addr.split("@", 1)[1].lower()
         score = 0
 
-        # suspicious tld (supports multi-part suffixes)
         try:
             ext = tldextract.extract(domain)
             tld = ext.suffix.lower() if ext.suffix else ""
@@ -111,11 +104,9 @@ class PhishingDetector:
         except Exception:
             pass
 
-        # MX check
         if not self._has_mx_records(domain):
             score += 25
 
-        # brand impersonation placeholder (None) - could add heuristics later
         brand_imp = None
         risk = "High" if score >= 60 else "Medium" if score >= 30 else "Low"
         return {
@@ -134,7 +125,6 @@ class PhishingDetector:
             answers = self.resolver.resolve(domain, "MX")
             ok = len(answers) > 0
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
-            # fallback to A record
             try:
                 aans = self.resolver.resolve(domain, "A")
                 ok = len(aans) > 0
@@ -145,12 +135,10 @@ class PhishingDetector:
         self.mx_cache[domain] = ok
         return ok
 
-    # Rule 4: Message-ID presence
     def rule4_message_id(self, msg_id):
         mid = str(msg_id or "").strip()
         return {"Rule4_Message_ID": mid, "Rule4_Missing": (mid == "")}
 
-    # Rule 5: Content analysis (suspicious words, link mismatch, imgs)
     def rule5_content(self, body_text, body_html):
         text = (body_text or "")[:200000]
         html = (body_html or "")[:200000]
@@ -167,20 +155,14 @@ class PhishingDetector:
             links = []
             try:
                 soup = BeautifulSoup(h or "", "html.parser")
-                # <a href>
                 for a in soup.find_all("a", href=True):
                     visible = a.get_text(strip=True) or ""
                     actual = a.get("href") or ""
                     links.append((visible, actual))
-                # <img> - if wrapped in <a> use href else use src
                 for img in soup.find_all("img"):
                     src = (img.get("src") or "").strip()
                     parent = img.find_parent("a")
-                    href = ""
-                    if parent and parent.get("href"):
-                        href = parent.get("href").strip()
-                    else:
-                        href = src
+                    href = parent.get("href").strip() if parent and parent.get("href") else src
                     if href:
                         links.append(("[IMAGE]", href))
             except Exception:
@@ -202,11 +184,8 @@ class PhishingDetector:
                     return False
                 if v == "[IMAGE]":
                     return False
-                # if visible looks like a URL, normalize
                 if re.match(r"^https?://", v, re.IGNORECASE):
                     return v.lower() != a.lower()
-                # if visible is just text, compare domains if actual is URL
-                # extract domain part
                 try:
                     actual_domain = tldextract.extract(a).registered_domain or ""
                     visible_domain = tldextract.extract(v).registered_domain or ""
@@ -214,7 +193,6 @@ class PhishingDetector:
                         return actual_domain.lower() != visible_domain.lower()
                 except Exception:
                     pass
-                # fallback: compare visible text to actual url
                 return v.lower() != a.lower()
             except Exception:
                 return False
@@ -226,7 +204,6 @@ class PhishingDetector:
         links.extend(extract_links_from_html(html))
         links.extend(extract_links_from_text(text))
 
-        # inspect up to 200 links
         for vis, act in links[:200]:
             if check_mismatch(vis, act):
                 link_mismatch = True
@@ -252,9 +229,9 @@ def main():
     total = 0
     flagged = 0
 
-    # define CSV header fields (include brand impersonation to avoid mismatch)
     fields = [
-        "Filename", "From", "Return-Path", "Authentication-Results",
+        "Filename", "Subject",
+        "From", "Return-Path", "Authentication-Results",
         "Message-ID", "Date",
         "Rule1_Status", "Rule1_From_Email", "Rule1_Return_Email",
         "Rule2_SPF", "Rule2_DKIM", "Rule2_Result",
@@ -267,6 +244,7 @@ def main():
     try:
         with open(INPUT_CSV, "r", encoding="utf-8") as inp, \
              open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as out:
+
             reader = csv.DictReader(inp)
             writer = csv.DictWriter(out, fieldnames=fields)
             writer.writeheader()
@@ -274,20 +252,19 @@ def main():
             for idx, row in enumerate(reader, start=1):
                 total += 1
 
-                # print only the progress number
                 print(f"[PROGRESS] Now at email #{idx}")
 
                 filename = row.get("Filename", "") or f"row_{idx}"
+                subject = row.get("Subject", "")
+
                 from_h = row.get("From", "")
 
-                # run rules
                 r1 = det.rule1_from_return(from_h, row.get("Return-Path", ""))
                 r2 = det.rule2_auth(row.get("Authentication-Results", ""))
                 r3 = det.rule3_domain(from_h)
                 r4 = det.rule4_message_id(row.get("Message-ID", ""))
                 r5 = det.rule5_content(row.get("Body_Text", ""), row.get("Body_HTML", ""))
 
-                # final phishing decision (summary)
                 is_phishing = bool(r5.get("Rule5_Phishing", False)) or \
                               (r2.get("Rule2_Result") == "PHISHING") or \
                               (r3.get("Rule3_Risk_Level") == "High")
@@ -296,6 +273,7 @@ def main():
 
                 out_row = {
                     "Filename": filename,
+                    "Subject": subject,
                     "From": from_h,
                     "Return-Path": row.get("Return-Path", ""),
                     "Authentication-Results": row.get("Authentication-Results", ""),
@@ -304,7 +282,6 @@ def main():
                     **r1, **r2, **r3, **r4, **r5
                 }
 
-                # safe write: ensure only declared fields are written
                 filtered = {k: out_row.get(k, "") for k in fields}
                 writer.writerow(filtered)
 
@@ -315,7 +292,6 @@ def main():
         print(f"[ERROR] Unexpected error: {e}")
         return
 
-    # final short summary
     print(f"[DONE] Processed {total} emails. Flagged as phishing: {flagged}.")
     print(f"Results saved to: {OUTPUT_CSV}")
 
