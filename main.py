@@ -1,186 +1,245 @@
-#!/usr/bin/env python3
-
-import mailbox
 import email
-import re
 import csv
-from email.header import decode_header
-from urllib.parse import urlparse
-import html
+import os
+import mailbox
+import re
+from email.header import decode_header  
 
-MBOX_PATH = "/home/kali/tool/email/phishing3.mbox"
-OUTPUT_CSV = "/home/kali/tool/csv/phish_results.csv"
 
-# ------------------- RULES CONFIG -------------------
-SUSPICIOUS_WORDS = [
-    "verify", "update", "urgent", "suspended", "reset", "confirm",
-    "security alert", "unusual activity", "account locked", "billing issue"
-]
+class EmailHeaderExtractor:
+    def __init__(self):
+        # Headers to extract directly from the email 
+        self.headers_to_extract = [
+            'From', 'To', 'Subject', 'Date', 'Message-ID',
+            'Return-Path', 'Received', 'Reply-To', 'Sender',
+            'Content-Type', 'Authentication-Results',
+            'DKIM-Signature'
+        ]
 
-SHORTENERS = ("bit.ly","t.co","tinyurl.com","goo.gl","ow.ly","is.gd","buff.ly")
-
-DOMAIN_RE = re.compile(
-    r'\b((?:[a-z0-9-]{1,63}\.)+[a-z]{2,63}|xn--[a-z0-9-]+|\d{1,3}(?:\.\d{1,3}){3})\b',
-    re.IGNORECASE
-)
-
-ANCHOR_RE = re.compile(
-    r'<a\s+[^>]*href\s*=\s*"(.*?)"[^>]*>(.*?)</a>',
-    re.IGNORECASE | re.DOTALL
-)
-
-AREA_RE = re.compile(
-    r'<area\s+[^>]*href\s*=\s*"(.*?)"[^>]*>',
-    re.IGNORECASE | re.DOTALL
-)
-
-# ------------------- DECODERS -------------------
-def decode_header_value(value):
-    if not value:
-        return ""
-    try:
-        decoded = decode_header(value)
-        final = ""
-        for part, enc in decoded:
-            if isinstance(part, bytes):
-                final += part.decode(enc or "utf-8", errors="ignore")
+    def decode_header_value(self, header_value):
+        """Decode MIME-encoded email headers safely."""
+        try:
+            if isinstance(header_value, str):
+                return header_value.strip()
             else:
-                final += part
-        return final
-    except:
-        return str(value)
+                decoded_parts = []
+                if hasattr(header_value, '__iter__') and not isinstance(header_value, str):
+                    for part in header_value:
+                        if isinstance(part, tuple):
+                            bytes_data, encoding = part
+                            if encoding:
+                                decoded_parts.append(bytes_data.decode(encoding, errors='ignore'))
+                            else:
+                                decoded_parts.append(bytes_data.decode('utf-8', errors='ignore'))
+                        else:
+                            decoded_parts.append(str(part))
+                    return ' '.join(decoded_parts).strip()
+                else:
+                    return str(header_value).strip()
+        except:
+            return str(header_value).strip()
 
-# ------------------- HELPERS -------------------
-def extract_domain_from_url(url):
-    try:
-        p = urlparse(url)
-        netloc = p.netloc or p.path
-        if "@" in netloc:
-            netloc = netloc.split("@")[-1]
-        if ":" in netloc:
-            netloc = netloc.split(":")[0]
-        return (netloc or "").lower()
-    except:
+    def extract_ip(self, msg):
+        ipv4_regex = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+        ipv6_regex = r'\b[0-9a-fA-F:]{2,}\b'
+
+        # 1. Try X-Originating-IP first (even though we don't store it as a column)
+        xip = msg.get('X-Originating-IP', '')
+        if xip:
+            m = re.search(ipv4_regex, xip)
+            if m:
+                return m.group(0)
+
+        # 2. Try Authentication-Results headers (e.g. "sender IP is 137.184.34.4")
+        auth_results = msg.get_all('Authentication-Results', []) or []
+        for line in auth_results:
+            m = re.search(r'sender IP is\s+(' + ipv4_regex + r')', line)
+            if m:
+                return m.group(1)
+
+        # 3. Scan "Received" headers from bottom (original sender) to top
+        received_headers = msg.get_all('Received', []) or []
+
+        for rec in reversed(received_headers):
+            ips = re.findall(ipv4_regex, rec)
+            for ip in ips:
+                # Skip private IPv4 ranges
+                if ip.startswith('10.') or ip.startswith('192.168.') or ip.startswith('127.'):
+                    continue
+                if ip.startswith('172.'):
+                    try:
+                        second = int(ip.split('.')[1])
+                        if 16 <= second <= 31:
+                            continue
+                    except:
+                        pass
+                # First public IPv4 from the bottom of Received chain = likely original sender
+                return ip
+
+        # 4. As a fallback, try IPv6 from bottom of Received chain
+        for rec in reversed(received_headers):
+            m = re.search(ipv6_regex, rec)
+            if m:
+                return m.group(0)
+
+        # 5. Nothing found
         return ""
 
-def extract_domain_from_text(text):
-    t = html.unescape(text).strip()
-    m = DOMAIN_RE.search(t)
-    return m.group(1).lower() if m else ""
+    def extract_headers_and_body(self, msg):
+        """Extract headers, plain text body, HTML body, and Source_IP."""
+        try:
+            data = {}
 
-def find_links(html_body):
-    anchors = []
-    for m in ANCHOR_RE.finditer(html_body):
-        href = html.unescape(m.group(1).strip())
-        display = re.sub('<.*?>', '', m.group(2)).strip()
-        anchors.append((href, display))
-    areas = AREA_RE.findall(html_body)
-    return anchors, areas
+            # Extract selected headers
+            for header in self.headers_to_extract:
+                header_value = msg.get(header, '')
+                data[header] = self.decode_header_value(header_value)
 
-# ------------------- MAIN ANALYSIS -------------------
-def analyze_message(msg):
-    msg_id = decode_header_value(msg.get("Message-ID",""))
-    date = decode_header_value(msg.get("Date",""))
-    from_addr = decode_header_value(msg.get("From",""))
-    to_addr = decode_header_value(msg.get("To",""))
-    subject = decode_header_value(msg.get("Subject",""))
+            # Extract unified source IP
+            data['Source_IP'] = self.extract_ip(msg)
 
-    result = {
-        "from": from_addr,
-        "to": to_addr,
-        "subject": subject,
-        "phishing_flag": False,
-        "reasons": [],
-        "urls_found": ""
-    }
+            # Extract email body
+            data['Body_Text'] = self.extract_body_text(msg)
+            data['Body_HTML'] = self.extract_body_html(msg)
 
-    # Extract HTML
-    html_body = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/html":
-                payload = part.get_payload(decode=True)
+            # Add subject at the top of Body_Text
+            data['Body_Text'] = f"Subject: {data['Subject']}\n\n" + data['Body_Text']
+
+            return data
+
+        except Exception as e:
+            print(f"Error processing email: {str(e)}")
+            data = {header: '' for header in self.headers_to_extract}
+            data['Source_IP'] = ''
+            data['Body_Text'] = ''
+            data['Body_HTML'] = ''
+            return data
+
+    def extract_from_eml_file(self, file_path):
+        """Process single .eml email file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                email_content = file.read()
+
+            msg = email.message_from_string(email_content)
+            data = self.extract_headers_and_body(msg)
+            data['Filename'] = os.path.basename(file_path)
+            return data
+
+        except Exception as e:
+            print(f"Error processing {file_path}: {str(e)}")
+            empty_data = {header: '' for header in self.headers_to_extract}
+            empty_data['Filename'] = os.path.basename(file_path)
+            empty_data['Source_IP'] = ''
+            empty_data['Body_Text'] = ''
+            empty_data['Body_HTML'] = ''
+            return empty_data
+
+    def extract_from_mbox_file(self, file_path):
+        """Extract emails from .mbox file containing multiple messages."""
+        all_emails = []
+        try:
+            mbox = mailbox.mbox(file_path)
+            print(f"Processing mbox file: {file_path} ({len(mbox)} emails)")
+
+            for i, msg in enumerate(mbox):
+                try:
+                    data = self.extract_headers_and_body(msg)
+                    data['Filename'] = f"{os.path.basename(file_path)}_email_{i+1}"
+                    all_emails.append(data)
+                except:
+                    empty_data = {header: '' for header in self.headers_to_extract}
+                    empty_data['Filename'] = f"{os.path.basename(file_path)}_email_{i+1}_error"
+                    empty_data['Source_IP'] = ''
+                    empty_data['Body_Text'] = ''
+                    empty_data['Body_HTML'] = ''
+                    all_emails.append(empty_data)
+
+            return all_emails
+
+        except Exception as e:
+            print(f"Error processing mbox {file_path}: {str(e)}")
+            empty_data = {header: '' for header in self.headers_to_extract}
+            empty_data['Filename'] = os.path.basename(file_path) + "_error"
+            empty_data['Source_IP'] = ''
+            empty_data['Body_Text'] = ''
+            empty_data['Body_HTML'] = ''
+            return [empty_data]
+
+    def extract_body_text(self, msg):
+        """Extract the plain text body only."""
+        try:
+            body_text = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body_text += payload.decode('utf-8', errors='ignore')
+            else:
+                payload = msg.get_payload(decode=True)
                 if payload:
-                    html_body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-                    break
-    else:
-        if msg.get_content_type() == "text/html":
-            payload = msg.get_payload(decode=True)
-            if payload:
-                html_body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+                    body_text = payload.decode('utf-8', errors='ignore')
+            return body_text.strip()
+        except:
+            return ""
 
-    urls = []
+    def extract_body_html(self, msg):
+        """Extract the HTML body only."""
+        try:
+            body_html = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/html":
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body_html += payload.decode('utf-8', errors='ignore')
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body_html = payload.decode('utf-8', errors='ignore')
+            return body_html.strip()
+        except:
+            return ""
 
-    if html_body:
+    def process_directory(self, input_directory, output_csv):
+        """Process all .eml and .mbox files inside a directory."""
+        all_data = []
 
-        anchors, areas = find_links(html_body)
+        print("🚀 Starting Email Header and Body Extraction...")
+        print("Supported formats: .eml and .mbox\n")
 
-        # -------- RULE 1: Check suspicious keywords in subject --------
-        for word in SUSPICIOUS_WORDS:
-            if word in subject.lower():
-                result["phishing_flag"] = True
-                result["reasons"].append(f"suspicious keyword: {word}")
+        for filename in os.listdir(input_directory):
+            file_path = os.path.join(input_directory, filename)
 
-        # -------- RULE 2: Anchor tag mismatch (visible vs actual URL) --------
-        for href, display in anchors:
-            urls.append(href)
-            href_domain = extract_domain_from_url(href)
-            disp_domain = extract_domain_from_text(display)
+            if os.path.isfile(file_path):
+                ext = os.path.splitext(filename.lower())[1]
 
-            if disp_domain and href_domain and disp_domain != href_domain:
-                result["phishing_flag"] = True
-                result["reasons"].append(
-                    f"display domain '{disp_domain}' != href domain '{href_domain}'"
-                )
+                if ext == ".eml":
+                    print(f"Processing .eml file: {filename}")
+                    all_data.append(self.extract_from_eml_file(file_path))
 
-        # -------- RULE 3: Detect URL shorteners --------
-            for s in SHORTENERS:
-                if s in href_domain:
-                    result["phishing_flag"] = True
-                    result["reasons"].append(f"shortened URL used: {s}")
-                    break
+                elif ext == ".mbox":
+                    print(f"Processing .mbox file: {filename}")
+                    all_data.extend(self.extract_from_mbox_file(file_path))
 
-        # -------- RULE 4: Numeric IP in link --------
-            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", href_domain):
-                result["phishing_flag"] = True
-                result["reasons"].append("numeric IP used in link")
+        # Save results to CSV
+        if all_data:
+            with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['Filename'] + self.headers_to_extract + ['Source_IP', 'Body_Text', 'Body_HTML']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for data in all_data:
+                    writer.writerow(data)
 
-        # -------- RULE 5: Punycode domains (IDN homograph attacks) --------
-            if href_domain.startswith("xn--"):
-                result["phishing_flag"] = True
-                result["reasons"].append("punycode domain in link")
+            print(f"\n✅ Extraction completed: {len(all_data)} emails processed.")
+            print(f"📁 Results saved to: {output_csv}")
 
-        # -------- RULE 6: Image map with suspicious URL --------
-        for area in areas:
-            urls.append(area)
-            if re.match(r"^http://\d{1,3}(\.\d{1,3}){3}", area):
-                result["phishing_flag"] = True
-                result["reasons"].append("image-map link uses numeric IP")
-
-    result["urls_found"] = ";".join(urls)
-    result["reasons"] = ";".join(dict.fromkeys(result["reasons"]))
-
-    return result
-
-# ------------------- SCAN MBOX -------------------
-def process_mbox():
-    mbox = mailbox.mbox(MBOX_PATH)
-    fieldnames = ["from","to","subject","phishing_flag","reasons","urls_found"]
-
-    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for msg in mbox:
-            try:
-                email_msg = email.message_from_bytes(msg.as_bytes())
-            except:
-                continue
-
-            res = analyze_message(email_msg)
-            writer.writerow(res)
-
-    print("Done. Results saved to:", OUTPUT_CSV)
+        else:
+            print("❌ No .eml or .mbox files found!")
 
 if __name__ == "__main__":
-    process_mbox()
+    extractor = EmailHeaderExtractor()
+    input_dir = "/home/kali/tool/email/phishing_pot/email"
+    output_file = "/home/kali/tool/csv/email.csv"
+    extractor.process_directory(input_dir, output_file)
